@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+output/
+data/btc_prediction.db
+.streamlit/
+*.egg-info/
+dist/
+build/
+.env
