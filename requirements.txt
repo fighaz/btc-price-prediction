@@ -1,8 +1,12 @@
 streamlit>=1.30
 pandas
 numpy
+scipy
 scikit-learn
 statsmodels
 matplotlib
 requests
 sqlalchemy
+python-dotenv
+pymysql
+alembic
