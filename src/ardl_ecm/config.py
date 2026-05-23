@@ -6,11 +6,11 @@ Streamlit / CLI bisa override per-run.
 """
 
 # Lag selection (frekuensi bulanan -> lag kecil)
-MAX_LAG_ENDOG = 3
-MAX_LAG_EXOG = 3
+MAX_LAG_ENDOG = 4
+MAX_LAG_EXOG = 4
 IC = "aic"
 TREND = "c"
-VAR_MAXLAG = 3
+VAR_MAXLAG = 4
 
 # Transform & windowing
 USE_LOG_TRANSFORM = True

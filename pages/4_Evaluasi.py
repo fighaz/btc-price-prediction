@@ -1,15 +1,16 @@
 """
 Evaluasi - Bandingkan prediksi vs data aktual (per bulan)
 """
-import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
 from db.engine import get_session
 from db.repository import get_model_runs, get_model_run, get_evaluation_for_run
+from src.ardl_ecm.charts import error_bar_chart, actual_vs_predicted_chart
 
 st.set_page_config(page_title="Evaluasi", page_icon="📏", layout="wide")
-st.title("Evaluasi Prediksi")
+st.title("📏 Evaluasi Prediksi")
+st.caption("Bandingkan akurasi prediksi terhadap harga aktual.")
 
 session = get_session()
 runs = get_model_runs(session, limit=50)
@@ -24,29 +25,40 @@ eval_runs = [
 if not eval_runs:
     st.info(
         "Belum ada evaluasi. Jalankan prediksi mode **Forecast + Evaluasi** atau "
-        "**Backtest** di halaman **Prediksi Baru**."
+        "**Backtest** di halaman **🔮 Prediksi Baru**."
     )
     session.close()
     st.stop()
 
+# ============================================================================
 # Ringkasan
+# ============================================================================
 st.subheader("Ringkasan Evaluasi")
 summary = pd.DataFrame(eval_runs)
-summary["run_at"] = pd.to_datetime(summary["run_at"]).dt.strftime("%Y-%m-%d %H:%M")
-summary["eval_mape"] = summary["eval_mape"].apply(
-    lambda x: f"{x:.2f}%" if pd.notnull(x) else "-"
-)
-summary["eval_rmse"] = summary["eval_rmse"].apply(
-    lambda x: f"Rp {x:,.0f}" if pd.notnull(x) else "-"
-)
-summary["eval_ci_coverage"] = summary["eval_ci_coverage"].apply(
-    lambda x: f"{x:.1f}%" if pd.notnull(x) else "-"
-)
+summary["run_at"] = pd.to_datetime(summary["run_at"])
 display_cols = [
     "id", "run_at", "mode", "train_end_date",
     "eval_mape", "eval_rmse", "eval_ci_coverage", "status",
 ]
-st.dataframe(summary[display_cols], use_container_width=True, hide_index=True)
+st.dataframe(
+    summary[display_cols],
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "id": st.column_config.NumberColumn("Run ID", format="%d"),
+        "run_at": st.column_config.DatetimeColumn(
+            "Waktu Run", format="YYYY-MM-DD HH:mm"
+        ),
+        "mode": st.column_config.TextColumn("Mode"),
+        "train_end_date": st.column_config.DateColumn("Train End"),
+        "eval_mape": st.column_config.NumberColumn("MAPE", format="%.2f%%"),
+        "eval_rmse": st.column_config.NumberColumn("RMSE", format="Rp %.0f"),
+        "eval_ci_coverage": st.column_config.NumberColumn(
+            "CI Coverage", format="%.1f%%"
+        ),
+        "status": st.column_config.TextColumn("Status"),
+    },
+)
 
 st.divider()
 st.subheader("Detail Evaluasi")
@@ -63,72 +75,63 @@ if selected_id:
     if eval_df.empty:
         st.warning("Tidak ada data evaluasi untuk run ini.")
     else:
+        # Kartu metrik
         c1, c2, c3 = st.columns(3)
+        mape = run.get("eval_mape")
         c1.metric(
-            "MAPE",
-            f"{run['eval_mape']:.2f}%" if run.get("eval_mape") else "-",
+            "MAPE", f"{mape:.2f}%" if mape is not None else "-",
+            delta="Target < 10%" if mape is not None else None,
+            delta_color="off",
         )
+        rmse = run.get("eval_rmse")
         c2.metric(
-            "RMSE",
-            f"Rp {run['eval_rmse']:,.0f}" if run.get("eval_rmse") else "-",
+            "RMSE", f"Rp {rmse/1e9:,.3f} M" if rmse is not None else "-"
         )
+        ci = run.get("eval_ci_coverage")
         c3.metric(
-            "CI Coverage",
-            f"{run['eval_ci_coverage']:.1f}%"
-            if run.get("eval_ci_coverage")
-            else "-",
+            "CI Coverage", f"{ci:.1f}%" if ci is not None else "-",
+            delta="Target ~95%" if ci is not None else None,
+            delta_color="off",
         )
 
         eval_df = eval_df.copy()
         eval_df["Target_Month"] = pd.to_datetime(eval_df["Target_Month"])
-        months_str = eval_df["Target_Month"].dt.strftime("%Y-%m")
-        error_pct = eval_df["Error (%)"].values
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-
-        signed_err = eval_df["Predicted_Low"] - eval_df["Actual_Low"]
-        colors = ["#4CAF50" if e >= 0 else "#F44336" for e in signed_err]
-        ax1.bar(months_str, error_pct, color=colors, alpha=0.7)
-        ax1.axhline(
-            y=pd.Series(error_pct).mean(), color="#FF9800", linestyle="--",
-            label=f"Mean: {pd.Series(error_pct).mean():.2f}%",
+        st.markdown("**Aktual vs Prediksi**")
+        st.altair_chart(
+            actual_vs_predicted_chart(eval_df), use_container_width=True
         )
-        ax1.set_title("Error per Bulan (%)")
-        ax1.set_ylabel("Error (%)")
-        ax1.legend()
-        ax1.grid(True, alpha=0.3, axis="y")
-        ax1.tick_params(axis="x", rotation=45)
 
-        ax2.plot(
-            months_str, eval_df["Actual_Low"] / 1e9,
-            label="Aktual", color="#4CAF50", linewidth=2, marker="o",
+        st.markdown("**Error per Bulan**")
+        st.altair_chart(error_bar_chart(eval_df), use_container_width=True)
+        st.caption(
+            "Hijau = prediksi lebih tinggi dari aktual (over) · "
+            "merah = prediksi lebih rendah (under)."
         )
-        ax2.plot(
-            months_str, eval_df["Predicted_Low"] / 1e9,
-            label="Prediksi", color="#E91E63", linewidth=2, marker="s",
-            linestyle="--",
-        )
-        ax2.set_title("Aktual vs Prediksi")
-        ax2.set_ylabel("Harga Low (Miliar IDR)")
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-        ax2.tick_params(axis="x", rotation=45)
 
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close()
-
-        st.subheader("Tabel Perbandingan")
+        st.markdown("**Tabel Perbandingan**")
         display = eval_df.copy()
         display["Target_Month"] = display["Target_Month"].dt.strftime("%Y-%m")
-        display["Actual_Low"] = display["Actual_Low"].apply(lambda x: f"Rp {x:,.0f}")
-        display["Predicted_Low"] = display["Predicted_Low"].apply(
-            lambda x: f"Rp {x:,.0f}"
+        st.dataframe(
+            display,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Target_Month": st.column_config.TextColumn("Bulan"),
+                "Actual_Low": st.column_config.NumberColumn(
+                    "Aktual Low", format="Rp %.0f"
+                ),
+                "Predicted_Low": st.column_config.NumberColumn(
+                    "Prediksi Low", format="Rp %.0f"
+                ),
+                "Error (Rp)": st.column_config.NumberColumn(
+                    "Error (Rp)", format="Rp %.0f"
+                ),
+                "Error (%)": st.column_config.NumberColumn(
+                    "Error (%)", format="%.2f%%"
+                ),
+                "Dalam CI": st.column_config.TextColumn("Dalam CI"),
+            },
         )
-        display["Error (Rp)"] = display["Error (Rp)"].apply(
-            lambda x: f"Rp {x:,.0f}"
-        )
-        display["Error (%)"] = display["Error (%)"].apply(lambda x: f"{x:.2f}%")
-        st.dataframe(display, use_container_width=True, hide_index=True)
 
 session.close()

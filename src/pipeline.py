@@ -9,6 +9,7 @@ Tiga entry-point sesuai mode:
 import logging
 
 import numpy as np
+import pandas as pd
 
 from src.ardl_ecm.config import (
     MAX_LAG_ENDOG,
@@ -59,6 +60,7 @@ def _build_ardl_info(endog_lag, exog_orders, bounds_F, cointegration, ecm_info,
 
 def run_monthly_forecast(
     train_end,
+    target_month=None,
     log_transform=USE_LOG_TRANSFORM,
     rolling_window_years=ROLLING_WINDOW_YEARS,
     max_lag_endog=MAX_LAG_ENDOG,
@@ -69,7 +71,19 @@ def run_monthly_forecast(
     progress_callback=None,
 ):
     """
-    Forecast monthly Low 1 bulan ke depan.
+    Forecast monthly Low untuk bulan target.
+
+    Asumsi: dijalankan di awal bulan M (tanggal 1). Training menggunakan data
+    s/d akhir bulan M-1. Harga Open hari pertama bulan M diambil dari API
+    dan diinjeksikan ke exog_future menggantikan proyeksi VAR.
+
+    Parameters
+    ----------
+    train_end    : str tanggal akhir data training (YYYY-MM-DD).
+                   Bila target_month diberikan, parameter ini diabaikan dan
+                   dihitung otomatis sebagai akhir bulan M-1.
+    target_month : str opsional "YYYY-MM" — bulan yang diprediksi.
+                   Bila None, dihitung sebagai bulan setelah train_end.
 
     Returns dict: monthly_history, forecast (DataFrame 1 baris), ardl_info,
     adf_results, ecm_info, figure.
@@ -79,7 +93,32 @@ def run_monthly_forecast(
             progress_callback(name, detail)
 
     step("fetch", "Mengambil data harian dari Indodax API...")
-    daily = fetch_btc_daily(to_date=train_end)
+
+    # Tentukan bulan target dan batas training
+    if target_month is not None:
+        target_month_start = pd.Timestamp(target_month + "-01")
+    else:
+        train_end_dt = pd.Timestamp(train_end)
+        target_month_start = train_end_dt + pd.offsets.MonthBegin(1)
+
+    target_year = target_month_start.year
+    target_month_num = target_month_start.month
+
+    # Fetch data hingga awal bulan target untuk mendapatkan Open hari pertama
+    daily = fetch_btc_daily(to_date=target_month_start.strftime("%Y-%m-%d"))
+
+    # Ambil Open hari pertama bulan target dari data partial
+    monthly_with_target = resample_to_monthly(daily, drop_partial=False)
+    target_mask = (
+        (monthly_with_target.index.year == target_year)
+        & (monthly_with_target.index.month == target_month_num)
+    )
+    current_open = (
+        float(monthly_with_target.loc[target_mask, "Open"].iloc[0])
+        if target_mask.any() else None
+    )
+
+    # Data training: bulan lengkap s/d M-1 (drop_partial=True default)
     monthly_full = resample_to_monthly(daily)
     monthly = apply_rolling_window(monthly_full, rolling_window_years)
 
@@ -102,8 +141,13 @@ def run_monthly_forecast(
     )
     ecm_info = interpret_ecm(uecm_fit, cointegrated)
 
-    step("forecast", "Proyeksi exog (VAR) + forecast 1 bulan...")
+    step("forecast", "Proyeksi exog (VAR) + forecast bulan ini...")
     exog_future = forecast_exog_var(exog, horizon=1, var_maxlag=var_maxlag)
+    # Injeksi actual Open bulan target bila sudah tersedia
+    if current_open is not None:
+        col_open = "log_Open" if log_transform else "Open"
+        actual_open_val = np.log(current_open) if log_transform else current_open
+        exog_future.iloc[0, exog_future.columns.get_loc(col_open)] = actual_open_val
     forecast = forecast_monthly(
         fit, endog, exog_future, horizon=1, log_transform=log_transform
     )
@@ -115,6 +159,7 @@ def run_monthly_forecast(
         endog_lag, exog_orders, bt.stat, status, ecm_info, train_r2
     )
     return {
+        "daily": daily,
         "monthly_history": monthly,
         "forecast": forecast,
         "ardl_info": ardl_info,
@@ -127,6 +172,7 @@ def run_monthly_forecast(
 def run_monthly_forecast_and_evaluate(
     train_end,
     eval_end,
+    target_month=None,
     log_transform=USE_LOG_TRANSFORM,
     rolling_window_years=ROLLING_WINDOW_YEARS,
     max_lag_endog=MAX_LAG_ENDOG,
@@ -138,8 +184,11 @@ def run_monthly_forecast_and_evaluate(
 ):
     """Forecast monthly + evaluasi terhadap aktual yang di-fetch sampai eval_end."""
     result = run_monthly_forecast(
-        train_end, log_transform, rolling_window_years, max_lag_endog,
-        max_lag_exog, ic, trend, var_maxlag, progress_callback,
+        train_end, target_month=target_month,
+        log_transform=log_transform, rolling_window_years=rolling_window_years,
+        max_lag_endog=max_lag_endog, max_lag_exog=max_lag_exog,
+        ic=ic, trend=trend, var_maxlag=var_maxlag,
+        progress_callback=progress_callback,
     )
     if progress_callback:
         progress_callback("evaluate", "Mengevaluasi forecast vs aktual...")
@@ -167,12 +216,25 @@ def run_monthly_backtest(
     """
     Walk-forward backtest N bulan.
 
-    Returns dict: monthly_history, results_df, metrics, figure.
+    Konsisten dengan asumsi dijalankan di awal bulan: tiap iterasi hanya
+    menggunakan data s/d tanggal 1 bulan target (Open hari pertama diinjeksikan
+    ke exog_future, Low/Close aktual dipakai hanya untuk evaluasi).
+
+    train_end diterima sebagai akhir bulan terakhir yang di-backtest, lalu
+    diubah ke tanggal 1 bulan itu agar fetch konsisten.
+
+    Returns dict: daily, monthly_history, results_df, metrics, figure.
     """
     if progress_callback:
         progress_callback("fetch", "Mengambil data harian dari Indodax API...")
-    daily = fetch_btc_daily(to_date=train_end)
-    monthly = resample_to_monthly(daily)
+
+    # Konsistensi: fetch s/d tanggal 1 bulan terakhir backtest
+    # (bukan akhir bulan) — sama dengan asumsi Forecast.
+    # resample drop_partial=False memastikan bulan terakhir masuk sebagai actual_row.
+    train_end_dt = pd.Timestamp(train_end)
+    last_month_start = train_end_dt.replace(day=1)
+    daily = fetch_btc_daily(to_date=last_month_start.strftime("%Y-%m-%d"))
+    monthly = resample_to_monthly(daily, drop_partial=False)
 
     def bt_progress(iter_no, total, detail):
         if progress_callback:
@@ -199,6 +261,7 @@ def run_monthly_backtest(
         figure = plot_backtest(results_df, metrics)
 
     return {
+        "daily": daily,
         "monthly_history": monthly,
         "results_df": results_df,
         "metrics": metrics,

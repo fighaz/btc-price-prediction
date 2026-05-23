@@ -46,42 +46,60 @@ with st.sidebar:
         pass
 
 # Landing page
-st.title("Prediksi Harga Terendah Bulanan BTC/IDR")
+st.title("📈 Prediksi Harga Terendah Bulanan BTC/IDR")
 st.markdown(
-    """
-Aplikasi prediksi harga **terendah bulanan** Bitcoin (BTC) dalam Rupiah Indonesia
-(IDR) menggunakan model **ARDL-ECM** (Autoregressive Distributed Lags - Error
-Correction Model) yang diestimasi secara ekonometrik.
+    "Aplikasi prediksi harga **terendah bulanan** Bitcoin (BTC) dalam Rupiah "
+    "Indonesia (IDR) menggunakan model **ARDL-ECM** (Autoregressive Distributed "
+    "Lags - Error Correction Model) yang diestimasi secara ekonometrik."
+)
 
-### Metodologi
+st.divider()
+
+st.subheader("🧭 Navigasi Halaman")
+nav1, nav2, nav3 = st.columns(3)
+with nav1:
+    st.markdown("**📊 Dashboard**")
+    st.caption("Ringkasan prediksi terbaru + tren low historis bulanan.")
+    st.markdown("**🔮 Prediksi Baru**")
+    st.caption("Jalankan prediksi: Forecast, Forecast+Evaluasi, atau Backtest.")
+with nav2:
+    st.markdown("**📋 Riwayat Prediksi**")
+    st.caption("Telusuri semua histori run beserta konfigurasinya.")
+    st.markdown("**📏 Evaluasi**")
+    st.caption("Bandingkan prediksi vs data aktual, ukur akurasi.")
+with nav3:
+    st.markdown("**📁 Data Historis**")
+    st.caption("Eksplorasi data harga harian & bulanan BTC/IDR.")
+
+st.divider()
+
+with st.expander("🔬 Metodologi ARDL-ECM"):
+    st.markdown(
+        """
 Data harian dari Indodax di-resample ke bulanan, lalu diproses lewat pipeline
-ekonometrik proper:
+ekonometrik:
+
 - **ADF test** — uji stasioneritas (I(0)/I(1))
 - **Lag selection** — pemilihan lag optimal via information criterion (AIC)
 - **ARDL estimation** — estimasi OLS via `statsmodels`
 - **Bounds test** — uji kointegrasi Pesaran-Shin-Smith
 - **UECM** — Error Correction Model, speed-of-adjustment (λ)
 - **VAR projection** — proyeksi variabel exogen untuk forecast
-
-### Fitur
-- **Dashboard** - Ringkasan prediksi terbaru
-- **Prediksi Baru** - Jalankan prediksi: mode Forecast, Forecast+Evaluasi, atau Backtest
-- **Riwayat Prediksi** - Browse semua histori run + config dari database
-- **Evaluasi** - Bandingkan prediksi vs data aktual
-- **Data Historis** - Eksplorasi data harga harian & bulanan
-
-### Cara Penggunaan
-1. Buka halaman **Prediksi Baru**, pilih mode, lalu jalankan prediksi
-2. Hasil + config run tersimpan otomatis ke database
-3. Lihat hasil di **Dashboard** atau **Riwayat Prediksi**
-4. Gunakan **Evaluasi** untuk mengukur akurasi prediksi vs aktual
-
-Gunakan menu di sidebar untuk navigasi antar halaman.
 """
-)
+    )
+
+with st.expander("🚀 Cara Penggunaan"):
+    st.markdown(
+        """
+1. Buka halaman **🔮 Prediksi Baru**, pilih mode, lalu jalankan prediksi
+2. Hasil + config run tersimpan otomatis ke database
+3. Lihat hasil di **📊 Dashboard** atau **📋 Riwayat Prediksi**
+4. Gunakan **📏 Evaluasi** untuk mengukur akurasi prediksi vs aktual
+"""
+    )
 
 st.divider()
 st.caption(
-    "Model ARDL-ECM monthly - Prediksi harga terendah bulanan BTC/IDR "
+    "Model ARDL-ECM monthly · Prediksi harga terendah bulanan BTC/IDR "
     "menggunakan data historis dari Indodax"
 )

@@ -3,7 +3,6 @@ Data Historis - Eksplorasi data harga BTC/IDR (harian & bulanan)
 """
 from datetime import date
 
-import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
@@ -11,6 +10,7 @@ from db.engine import init_db, get_session
 from db.repository import save_price_history, get_price_history, get_latest_price_date
 from src.ardl_ecm import fetch_btc_daily, resample_to_monthly
 from src.ardl_ecm.model import prepare_variables, check_stationarity
+from src.ardl_ecm.charts import price_history_chart
 
 init_db()
 
@@ -86,16 +86,11 @@ with scol4:
 st.subheader("Chart Harga")
 chart_col = st.selectbox("Kolom", ["Low", "Close", "Open", "High"], index=0)
 if not data.empty:
-    fig, ax = plt.subplots(figsize=(14, 5))
-    ax.plot(data[period_col], data[chart_col] / 1e9, color="#2196F3", linewidth=1)
-    ax.set_xlabel("Periode")
-    ax.set_ylabel(f"{chart_col} (Miliar IDR)")
-    ax.set_title(f"BTC/IDR {chart_col} Price ({freq})")
-    ax.grid(True, alpha=0.3)
-    ax.tick_params(axis="x", rotation=45)
-    plt.tight_layout()
-    st.pyplot(fig)
-    plt.close()
+    st.altair_chart(
+        price_history_chart(data, chart_col, period_col=period_col, freq_label=freq),
+        use_container_width=True,
+    )
+    st.caption("Arahkan kursor untuk detail nilai; scroll untuk zoom, drag untuk pan.")
 
 # Tabel
 st.subheader("Tabel Data")

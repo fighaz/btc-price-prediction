@@ -1,98 +1,149 @@
 """
-Dashboard - Ringkasan prediksi terbaru (ARDL-ECM monthly)
+Dashboard - Ringkasan prediksi terbaru + low historis bulanan (ARDL-ECM monthly)
 """
-import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
 from db.engine import get_session
-from db.repository import get_latest_run, get_evaluation_for_run
+from db.repository import get_latest_run, get_evaluation_for_run, get_price_history
+from src.ardl_ecm.data import resample_to_monthly
+from src.ardl_ecm.charts import forecast_with_history_chart
 
 st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide")
-st.title("Dashboard")
+st.title("📊 Dashboard")
+st.caption("Ringkasan prediksi harga terendah bulanan BTC/IDR — model ARDL-ECM")
 
 session = get_session()
 run_info, pred_df = get_latest_run(session)
 
 if run_info is None or pred_df.empty:
     st.info(
-        "Belum ada prediksi. Buka halaman **Prediksi Baru** untuk menjalankan "
+        "Belum ada prediksi. Buka halaman **🔮 Prediksi Baru** untuk menjalankan "
         "prediksi pertama."
     )
     session.close()
     st.stop()
 
-# Info model
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    p = run_info.get("endog_lag")
-    st.metric("Model", f"ARDL(p={p})" if p is not None else "ARDL-ECM")
-with col2:
-    st.metric("Mode", run_info["mode"])
-with col3:
-    f = run_info.get("bounds_f_stat")
-    st.metric("Bounds F-stat", f"{f:.4f}" if f is not None else "-")
-with col4:
-    st.metric("Kointegrasi", run_info.get("cointegration") or "-")
-
-if run_info.get("eval_mape") is not None:
-    c5, c6, c7 = st.columns(3)
-    with c5:
-        st.metric("MAPE (Evaluasi)", f"{run_info['eval_mape']:.2f}%")
-    with c6:
-        ci = run_info.get("eval_ci_coverage")
-        st.metric("CI Coverage", f"{ci:.1f}%" if ci is not None else "-")
-    with c7:
-        lam = run_info.get("lambda_ecm")
-        st.metric("ECM λ", f"{lam:.4f}" if lam is not None else "-")
-
-st.divider()
-st.subheader("Prediksi Terbaru")
-
 pred_df = pred_df.copy()
 pred_df["Target_Month"] = pd.to_datetime(pred_df["Target_Month"])
-months_str = pred_df["Target_Month"].dt.strftime("%Y-%m")
 
-fig, ax = plt.subplots(figsize=(14, 6))
-ax.plot(
-    months_str, pred_df["Predicted_Low"] / 1e9,
-    label="Prediksi Low", color="#E91E63", linewidth=2, marker="o", markersize=6,
+# ============================================================================
+# Low historis bulanan dari price_history (di-resample)
+# ============================================================================
+price_df = get_price_history(session)
+monthly_history = pd.DataFrame()
+if not price_df.empty:
+    daily_indexed = price_df.set_index("Time")
+    monthly_history = resample_to_monthly(daily_indexed, drop_partial=False)
+
+# ============================================================================
+# Kartu metrik utama
+# ============================================================================
+pred_row = pred_df.iloc[0]
+target_month = pred_row["Target_Month"].strftime("%Y-%m")
+pred_low = pred_row["Predicted_Low"]
+
+# delta vs rata-rata low 3 bulan terakhir
+delta_txt = None
+if not monthly_history.empty and len(monthly_history) >= 3:
+    avg_recent = monthly_history["Low"].tail(3).mean()
+    diff_pct = (pred_low - avg_recent) / avg_recent * 100
+    delta_txt = f"{diff_pct:+.1f}% vs rata-rata 3 bln"
+
+st.subheader(f"Prediksi Bulan {target_month}")
+m1, m2, m3, m4 = st.columns(4)
+m1.metric(
+    "Prediksi Low", f"Rp {pred_low/1e9:,.3f} M", delta=delta_txt,
+    delta_color="inverse",
 )
-if pred_df["CI_Lower"].notna().all() and pred_df["CI_Upper"].notna().all():
-    ax.fill_between(
-        months_str, pred_df["CI_Lower"] / 1e9, pred_df["CI_Upper"] / 1e9,
-        alpha=0.2, color="#E91E63", label="95% CI",
+m2.metric(
+    "CI Bawah (95%)",
+    f"Rp {pred_row['CI_Lower']/1e9:,.3f} M"
+    if pd.notnull(pred_row["CI_Lower"]) else "-",
+)
+m3.metric(
+    "CI Atas (95%)",
+    f"Rp {pred_row['CI_Upper']/1e9:,.3f} M"
+    if pd.notnull(pred_row["CI_Upper"]) else "-",
+)
+f = run_info.get("bounds_f_stat")
+m4.metric(
+    "Kointegrasi",
+    run_info.get("cointegration") or "-",
+    delta=f"F={f:.2f}" if f is not None else None,
+    delta_color="off",
+)
+
+# Ringkasan naratif
+if pd.notnull(pred_row["CI_Lower"]) and pd.notnull(pred_row["CI_Upper"]):
+    st.markdown(
+        f"> Model memprediksi harga **terendah** BTC/IDR pada **{target_month}** "
+        f"sekitar **Rp {pred_low:,.0f}**, dengan rentang kemungkinan "
+        f"(95% CI) **Rp {pred_row['CI_Lower']:,.0f}** – "
+        f"**Rp {pred_row['CI_Upper']:,.0f}**."
     )
 
-# Overlay evaluasi jika ada
+# Metrik model sekunder
+with st.expander("Detail model"):
+    d1, d2, d3, d4 = st.columns(4)
+    p = run_info.get("endog_lag")
+    d1.metric("Model", f"ARDL(p={p})" if p is not None else "ARDL-ECM")
+    d2.metric("Mode run", run_info["mode"])
+    lam = run_info.get("lambda_ecm")
+    d3.metric("ECM λ", f"{lam:.4f}" if lam is not None else "-")
+    r2 = run_info.get("train_r2")
+    d4.metric("R² training", f"{r2:.4f}" if r2 is not None else "-")
+    if run_info.get("eval_mape") is not None:
+        e1, e2 = st.columns(2)
+        e1.metric("MAPE (Evaluasi)", f"{run_info['eval_mape']:.2f}%")
+        ci = run_info.get("eval_ci_coverage")
+        e2.metric("CI Coverage", f"{ci:.1f}%" if ci is not None else "-")
+
+st.divider()
+
+# ============================================================================
+# Chart utama: history low + prediksi
+# ============================================================================
+st.subheader("Tren Harga Terendah Bulanan")
+
 eval_df = get_evaluation_for_run(session, run_info["id"])
-if not eval_df.empty:
-    eval_df = eval_df.copy()
-    eval_df["Target_Month"] = pd.to_datetime(eval_df["Target_Month"])
-    ax.plot(
-        eval_df["Target_Month"].dt.strftime("%Y-%m"),
-        eval_df["Actual_Low"] / 1e9,
-        label="Aktual", color="#4CAF50", linewidth=2, marker="s", markersize=6,
+
+if monthly_history.empty:
+    st.warning(
+        "Data historis belum tersedia di database. Jalankan **🔮 Prediksi Baru** "
+        "untuk mengisi data harga, atau gunakan tombol *Perbarui Data* di "
+        "**📁 Data Historis**."
+    )
+else:
+    chart = forecast_with_history_chart(
+        monthly_history, pred_df, eval_df if not eval_df.empty else None
+    )
+    st.altair_chart(chart, use_container_width=True)
+    st.caption(
+        "Garis biru = low historis bulanan · berlian merah = prediksi · "
+        "lingkaran hijau = aktual (bila tersedia). Arahkan kursor untuk detail; "
+        "scroll untuk zoom."
     )
 
-ax.set_xlabel("Bulan")
-ax.set_ylabel("Harga Low (Miliar IDR)")
-ax.set_title("Forecast Harga Terendah Bulanan BTC/IDR")
-ax.legend()
-ax.grid(True, alpha=0.3)
-ax.tick_params(axis="x", rotation=45)
-plt.tight_layout()
-st.pyplot(fig)
-plt.close()
-
+# ============================================================================
+# Tabel prediksi
+# ============================================================================
 st.subheader("Tabel Prediksi")
 display_df = pred_df.copy()
 display_df["Target_Month"] = display_df["Target_Month"].dt.strftime("%Y-%m")
-for col in ["Predicted_Low", "CI_Lower", "CI_Upper"]:
-    display_df[col] = display_df[col].apply(
-        lambda x: f"Rp {x:,.0f}" if pd.notnull(x) else "N/A"
-    )
-st.dataframe(display_df, use_container_width=True, hide_index=True)
+st.dataframe(
+    display_df,
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "Target_Month": st.column_config.TextColumn("Bulan Target"),
+        "Predicted_Low": st.column_config.NumberColumn(
+            "Prediksi Low", format="Rp %.0f"
+        ),
+        "CI_Lower": st.column_config.NumberColumn("CI Bawah", format="Rp %.0f"),
+        "CI_Upper": st.column_config.NumberColumn("CI Atas", format="Rp %.0f"),
+    },
+)
 
 st.caption(f"Run ID: {run_info['id']} | Tanggal run: {run_info['run_at']}")
 session.close()

@@ -1,45 +1,71 @@
 """
 Riwayat Prediksi - Browse histori model runs + config dari database
 """
-import matplotlib.pyplot as plt
+import altair as alt
 import pandas as pd
 import streamlit as st
 
 from db.engine import get_session
-from db.repository import get_model_runs, get_model_run, get_predictions_for_run
+from db.repository import (
+    get_model_runs,
+    get_model_run,
+    get_predictions_for_run,
+    get_price_history,
+)
+from src.ardl_ecm.data import resample_to_monthly
+from src.ardl_ecm.charts import forecast_with_history_chart
 
 st.set_page_config(page_title="Riwayat Prediksi", page_icon="📋", layout="wide")
-st.title("Riwayat Prediksi")
+st.title("📋 Riwayat Prediksi")
+st.caption("Telusuri seluruh histori run beserta konfigurasinya.")
 
 session = get_session()
 runs = get_model_runs(session, limit=50)
 
 if not runs:
     st.info(
-        "Belum ada riwayat prediksi. Buka halaman **Prediksi Baru** untuk "
+        "Belum ada riwayat prediksi. Buka halaman **🔮 Prediksi Baru** untuk "
         "menjalankan prediksi pertama."
     )
     session.close()
     st.stop()
 
+# ============================================================================
 # Tabel model runs
+# ============================================================================
 st.subheader("Daftar Model Runs")
 runs_df = pd.DataFrame(runs)
-runs_df["run_at"] = pd.to_datetime(runs_df["run_at"]).dt.strftime("%Y-%m-%d %H:%M")
-runs_df["bounds_f_stat"] = runs_df["bounds_f_stat"].apply(
-    lambda x: f"{x:.4f}" if pd.notnull(x) else "-"
-)
-runs_df["eval_mape"] = runs_df["eval_mape"].apply(
-    lambda x: f"{x:.2f}%" if pd.notnull(x) else "-"
-)
+runs_df["run_at"] = pd.to_datetime(runs_df["run_at"])
 
 display_cols = [
     "id", "run_at", "mode", "train_end_date", "endog_lag", "exog_orders",
     "bounds_f_stat", "cointegration", "eval_mape", "status",
 ]
-st.dataframe(runs_df[display_cols], use_container_width=True, hide_index=True)
+st.dataframe(
+    runs_df[display_cols],
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "id": st.column_config.NumberColumn("Run ID", format="%d"),
+        "run_at": st.column_config.DatetimeColumn(
+            "Waktu Run", format="YYYY-MM-DD HH:mm"
+        ),
+        "mode": st.column_config.TextColumn("Mode"),
+        "train_end_date": st.column_config.DateColumn("Train End"),
+        "endog_lag": st.column_config.NumberColumn("Lag p", format="%d"),
+        "exog_orders": st.column_config.TextColumn("Exog Orders"),
+        "bounds_f_stat": st.column_config.NumberColumn(
+            "Bounds F", format="%.4f"
+        ),
+        "cointegration": st.column_config.TextColumn("Kointegrasi"),
+        "eval_mape": st.column_config.NumberColumn("MAPE", format="%.2f%%"),
+        "status": st.column_config.TextColumn("Status"),
+    },
+)
 
+# ============================================================================
 # Detail per run
+# ============================================================================
 st.divider()
 st.subheader("Detail Run")
 
@@ -54,17 +80,22 @@ if selected_id:
     # Config run
     st.markdown("**Konfigurasi Run**")
     cfg_cols = st.columns(4)
-    cfg_cols[0].write(f"Mode: `{run['mode']}`")
-    cfg_cols[0].write(f"Train end: `{run['train_end_date']}`")
-    cfg_cols[1].write(f"Log transform: `{run['log_transform']}`")
-    cfg_cols[1].write(f"Rolling window: `{run['rolling_window_years']} thn`")
-    cfg_cols[2].write(f"Max lag endog: `{run['max_lag_endog']}`")
-    cfg_cols[2].write(f"Max lag exog: `{run['max_lag_exog']}`")
-    cfg_cols[3].write(f"IC: `{run['ic']}`")
-    cfg_cols[3].write(
-        f"Backtest months: `{run['backtest_months']}`"
-        if run["backtest_months"]
-        else "Backtest months: `-`"
+    cfg_cols[0].metric("Mode", run["mode"])
+    cfg_cols[1].metric("Train End", str(run["train_end_date"]))
+    cfg_cols[2].metric("Log Transform", "Ya" if run["log_transform"] else "Tidak")
+    cfg_cols[3].metric(
+        "Rolling Window",
+        f"{run['rolling_window_years']} thn"
+        if run["rolling_window_years"]
+        else "Semua data",
+    )
+    cfg_cols2 = st.columns(4)
+    cfg_cols2[0].metric("Max Lag Endog", run["max_lag_endog"])
+    cfg_cols2[1].metric("Max Lag Exog", run["max_lag_exog"])
+    cfg_cols2[2].metric("IC", run["ic"].upper())
+    cfg_cols2[3].metric(
+        "Backtest Months",
+        run["backtest_months"] if run["backtest_months"] else "-",
     )
 
     pred_df = get_predictions_for_run(session, selected_id)
@@ -73,38 +104,69 @@ if selected_id:
     else:
         pred_df = pred_df.copy()
         pred_df["Target_Month"] = pd.to_datetime(pred_df["Target_Month"])
-        months_str = pred_df["Target_Month"].dt.strftime("%Y-%m")
 
-        fig, ax = plt.subplots(figsize=(14, 5))
-        ax.plot(
-            months_str, pred_df["Predicted_Low"] / 1e9,
-            color="#E91E63", linewidth=2, marker="o", markersize=5,
-        )
-        if pred_df["CI_Lower"].notna().all() and pred_df["CI_Upper"].notna().all():
-            ax.fill_between(
-                months_str, pred_df["CI_Lower"] / 1e9, pred_df["CI_Upper"] / 1e9,
-                alpha=0.2, color="#E91E63",
+        # History dari DB untuk konteks chart
+        price_df = get_price_history(session)
+        monthly_history = pd.DataFrame()
+        if not price_df.empty:
+            monthly_history = resample_to_monthly(
+                price_df.set_index("Time"), drop_partial=False
             )
-        ax.set_xlabel("Bulan")
-        ax.set_ylabel("Harga Low (Miliar IDR)")
-        ax.set_title(f"Prediksi Run #{selected_id}")
-        ax.grid(True, alpha=0.3)
-        ax.tick_params(axis="x", rotation=45)
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close()
 
+        st.markdown("**Chart Prediksi**")
+        if not monthly_history.empty:
+            fc_input = pred_df.set_index("Target_Month")[
+                ["Predicted_Low", "CI_Lower", "CI_Upper"]
+            ]
+            st.altair_chart(
+                forecast_with_history_chart(monthly_history, fc_input),
+                use_container_width=True,
+            )
+        else:
+            # Fallback: hanya prediksi, tanpa history
+            chart_df = pd.DataFrame(
+                {
+                    "Bulan": pred_df["Target_Month"].dt.strftime("%Y-%m"),
+                    "Prediksi": pred_df["Predicted_Low"] / 1e9,
+                }
+            )
+            st.altair_chart(
+                alt.Chart(chart_df)
+                .mark_line(point=True, color="#E91E63")
+                .encode(
+                    x=alt.X("Bulan:O", title="Bulan"),
+                    y=alt.Y("Prediksi:Q", title="Prediksi Low (Miliar IDR)"),
+                    tooltip=["Bulan", alt.Tooltip("Prediksi:Q", format=",.3f")],
+                )
+                .properties(height=380)
+                .interactive(),
+                use_container_width=True,
+            )
+
+        st.markdown("**Tabel Prediksi**")
         display = pred_df.copy()
         display["Target_Month"] = display["Target_Month"].dt.strftime("%Y-%m")
-        for col in ["Predicted_Low", "CI_Lower", "CI_Upper"]:
-            display[col] = display[col].apply(
-                lambda x: f"Rp {x:,.0f}" if pd.notnull(x) else "N/A"
-            )
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        st.dataframe(
+            display,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Target_Month": st.column_config.TextColumn("Bulan Target"),
+                "Predicted_Low": st.column_config.NumberColumn(
+                    "Prediksi Low", format="Rp %.0f"
+                ),
+                "CI_Lower": st.column_config.NumberColumn(
+                    "CI Bawah", format="Rp %.0f"
+                ),
+                "CI_Upper": st.column_config.NumberColumn(
+                    "CI Atas", format="Rp %.0f"
+                ),
+            },
+        )
 
         csv = pred_df.to_csv(index=False)
         st.download_button(
-            "Download CSV",
+            "⬇️ Download CSV",
             csv,
             file_name=f"prediction_run_{selected_id}.csv",
             mime="text/csv",

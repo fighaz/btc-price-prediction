@@ -47,7 +47,12 @@ def rolling_backtest(
     progress_callback=None,
 ):
     """
-    Walk-forward backtest: refit setiap iterasi, forecast 1 bulan.
+    Walk-forward backtest: refit setiap iterasi, prediksi Low bulan target.
+
+    Asumsi: dijalankan di awal bulan target — harga Open hari pertama bulan
+    target sudah diketahui dan diinjeksikan ke exog_future menggantikan
+    proyeksi VAR, sehingga prediksi lebih akurat dan konsisten dengan
+    skenario penggunaan nyata (investor menjalankan model di tanggal 1).
 
     Returns:
         DataFrame results dengan satu baris per bulan target.
@@ -77,6 +82,13 @@ def rolling_backtest(
                 endog_t, exog_t, endog_lag, exog_orders, trend
             )
             exog_fut = forecast_exog_var(exog_t, horizon=1, var_maxlag=var_maxlag)
+            # Injeksi actual Open bulan target: di awal bulan kita sudah tahu
+            # harga pembukaan hari pertama, pakai nilai nyata bukan proyeksi VAR.
+            col_open = "log_Open" if log_transform else "Open"
+            actual_open_val = (
+                np.log(actual_row["Open"]) if log_transform else actual_row["Open"]
+            )
+            exog_fut.iloc[0, exog_fut.columns.get_loc(col_open)] = actual_open_val
             forecast = forecast_monthly(
                 fit, endog_t, exog_fut, horizon=1, log_transform=log_transform
             )

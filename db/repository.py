@@ -256,6 +256,42 @@ def get_predictions_for_run(session, run_id):
     )
 
 
+def get_all_predictions(session):
+    """
+    Gabungkan prediksi dari semua run sukses.
+
+    Untuk setiap bulan target, ambil prediksi dari run terbaru yang punya
+    bulan itu — sehingga cakupan bulan semaksimal mungkin dari semua run.
+
+    Returns DataFrame dengan kolom: Target_Month, Predicted_Low, CI_Lower,
+    CI_Upper, run_id.
+    """
+    rows = (
+        session.query(MonthlyPrediction, ModelRun.run_at)
+        .join(ModelRun, MonthlyPrediction.model_run_id == ModelRun.id)
+        .filter(ModelRun.status == "success")
+        .order_by(MonthlyPrediction.target_month, desc(ModelRun.run_at))
+        .all()
+    )
+    if not rows:
+        return pd.DataFrame()
+
+    seen = {}
+    for pred, run_at in rows:
+        key = pred.target_month
+        if key not in seen:
+            seen[key] = {
+                "Target_Month": pred.target_month,
+                "Predicted_Low": pred.predicted_low,
+                "CI_Lower": pred.ci_lower,
+                "CI_Upper": pred.ci_upper,
+                "run_id": pred.model_run_id,
+            }
+
+    df = pd.DataFrame(list(seen.values())).sort_values("Target_Month").reset_index(drop=True)
+    return df
+
+
 def get_latest_run(session):
     """Get model run sukses terbaru + prediksinya. Returns (run_info, pred_df)."""
     run = (
