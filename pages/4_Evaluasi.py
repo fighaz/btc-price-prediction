@@ -38,7 +38,7 @@ summary = pd.DataFrame(eval_runs)
 summary["run_at"] = pd.to_datetime(summary["run_at"])
 display_cols = [
     "id", "run_at", "mode", "train_end_date",
-    "eval_mape", "eval_rmse", "eval_ci_coverage", "status",
+    "eval_mape", "eval_mae", "eval_rmse", "eval_r2", "eval_ci_coverage", "status",
 ]
 st.dataframe(
     summary[display_cols],
@@ -52,7 +52,9 @@ st.dataframe(
         "mode": st.column_config.TextColumn("Mode"),
         "train_end_date": st.column_config.DateColumn("Train End"),
         "eval_mape": st.column_config.NumberColumn("MAPE", format="%.2f%%"),
+        "eval_mae": st.column_config.NumberColumn("MAE", format="Rp %.0f"),
         "eval_rmse": st.column_config.NumberColumn("RMSE", format="Rp %.0f"),
+        "eval_r2": st.column_config.NumberColumn("R²", format="%.4f"),
         "eval_ci_coverage": st.column_config.NumberColumn(
             "CI Coverage", format="%.1f%%"
         ),
@@ -76,19 +78,29 @@ if selected_id:
         st.warning("Tidak ada data evaluasi untuk run ini.")
     else:
         # Kartu metrik
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4, c5 = st.columns(5)
         mape = run.get("eval_mape")
         c1.metric(
             "MAPE", f"{mape:.2f}%" if mape is not None else "-",
             delta="Target < 10%" if mape is not None else None,
             delta_color="off",
         )
-        rmse = run.get("eval_rmse")
+        mae = run.get("eval_mae")
         c2.metric(
-            "RMSE", f"Rp {rmse/1e9:,.3f} M" if rmse is not None else "-"
+            "MAE", f"Rp {mae/1e6:,.1f} Jt" if mae is not None else "-"
+        )
+        rmse = run.get("eval_rmse")
+        c3.metric(
+            "RMSE", f"Rp {rmse/1e6:,.1f} Jt" if rmse is not None else "-"
+        )
+        r2 = run.get("eval_r2")
+        c4.metric(
+            "R²", f"{r2:.4f}" if r2 is not None else "-",
+            delta="Target > 0.9" if r2 is not None else None,
+            delta_color="off",
         )
         ci = run.get("eval_ci_coverage")
-        c3.metric(
+        c5.metric(
             "CI Coverage", f"{ci:.1f}%" if ci is not None else "-",
             delta="Target ~95%" if ci is not None else None,
             delta_color="off",

@@ -121,7 +121,7 @@ with st.form("prediction_form"):
         max_lag_exog = st.number_input(
             "Max lag eksogen", min_value=1, max_value=12, value=4,
         )
-        ic = st.selectbox("Information Criterion", ["aic", "bic"], index=0)
+        ic = st.selectbox("Information Criterion", ["aic", "bic"], index=0, disabled=True)
 
     # Field kondisional per mode
     eval_end = None
