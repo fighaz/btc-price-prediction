@@ -45,9 +45,14 @@ logger = logging.getLogger(__name__)
 
 
 def _build_ardl_info(endog_lag, exog_orders, bounds_F, cointegration, ecm_info,
-                     train_r2):
-    """Rakit dict ringkasan model untuk disimpan ke DB."""
-    return {
+                     train_r2, bt=None):
+    """Rakit dict ringkasan model untuk disimpan ke DB.
+
+    Bila objek bounds-test `bt` diberikan, sertakan batas kritis lengkap
+    (untuk menjelaskan MENGAPA verdict kointegrasi tertentu muncul). Field ini
+    hanya dipakai UI; field DB tetap subset yang lama.
+    """
+    info = {
         "endog_lag": int(endog_lag),
         "exog_orders": str(exog_orders),
         "bounds_f_stat": float(bounds_F),
@@ -56,6 +61,16 @@ def _build_ardl_info(endog_lag, exog_orders, bounds_F, cointegration, ecm_info,
         "half_life_months": ecm_info.get("half_life_months") if ecm_info else None,
         "train_r2": float(train_r2),
     }
+    if bt is not None:
+        try:
+            crit = bt.crit_vals.copy()
+            info["bounds_crit_table"] = crit
+            info["bounds_lower_5"] = float(crit.loc[95.0, "lower"])
+            info["bounds_upper_5"] = float(crit.loc[95.0, "upper"])
+        except Exception as e:
+            logger.warning(f"Gagal mengambil crit_vals bounds test: {e}")
+            info["bounds_crit_table"] = None
+    return info
 
 
 def run_monthly_forecast(
@@ -127,13 +142,23 @@ def run_monthly_forecast(
     adf_results = check_stationarity(endog, exog)
 
     step("lag", "Lag selection (information criterion)...")
-    endog_lag, exog_orders = select_lag_order(
+    endog_lag, exog_orders, lag_ic_table = select_lag_order(
         endog, exog, max_lag_endog, max_lag_exog, ic, trend
     )
 
     step("estimate", "Estimasi ARDL...")
     fit = estimate_ardl(endog, exog, endog_lag, exog_orders, trend)
     train_r2 = compute_train_r2(fit, endog)
+
+    # Tabel koefisien ARDL (param, koefisien, t-stat, p-value) untuk transparansi.
+    coef_table = pd.DataFrame(
+        {
+            "param": fit.params.index,
+            "coef": fit.params.values,
+            "t": fit.tvalues.reindex(fit.params.index).values,
+            "p": fit.pvalues.reindex(fit.params.index).values,
+        }
+    )
 
     step("bounds", "Bounds test kointegrasi...")
     uecm_fit, bt, cointegrated, status = run_bounds_test(
@@ -142,13 +167,15 @@ def run_monthly_forecast(
     ecm_info = interpret_ecm(uecm_fit, cointegrated)
 
     step("forecast", "Proyeksi exog (VAR) + forecast bulan ini...")
-    exog_future = forecast_exog_var(exog, horizon=1, var_maxlag=var_maxlag)
+    exog_future, var_info = forecast_exog_var(exog, horizon=1, var_maxlag=var_maxlag)
+    # Simpan proyeksi VAR murni sebelum injeksi Open (untuk perbandingan di UI).
+    var_info["exog_var_only"] = exog_future.copy()
     # Injeksi actual Open bulan target bila sudah tersedia
     if current_open is not None:
         col_open = "log_Open" if log_transform else "Open"
         actual_open_val = np.log(current_open) if log_transform else current_open
         exog_future.iloc[0, exog_future.columns.get_loc(col_open)] = actual_open_val
-    forecast = forecast_monthly(
+    forecast, forecast_detail = forecast_monthly(
         fit, endog, exog_future, horizon=1, log_transform=log_transform
     )
 
@@ -156,12 +183,19 @@ def run_monthly_forecast(
     figure = plot_single_forecast(forecast, monthly)
 
     ardl_info = _build_ardl_info(
-        endog_lag, exog_orders, bt.stat, status, ecm_info, train_r2
+        endog_lag, exog_orders, bt.stat, status, ecm_info, train_r2, bt=bt
     )
     return {
         "daily": daily,
+        "monthly_full": monthly_full,
         "monthly_history": monthly,
+        "current_open": current_open,
         "forecast": forecast,
+        "forecast_detail": forecast_detail,
+        "exog_future": exog_future,
+        "var_info": var_info,
+        "coef_table": coef_table,
+        "lag_ic_table": lag_ic_table,
         "ardl_info": ardl_info,
         "adf_results": adf_results,
         "ecm_info": ecm_info,

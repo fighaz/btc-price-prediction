@@ -10,3 +10,5 @@ sqlalchemy
 python-dotenv
 pymysql
 alembic
+tabulate
+reportlab

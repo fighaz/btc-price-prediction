@@ -14,6 +14,7 @@ from db.repository import (
 )
 from src.ardl_ecm.data import resample_to_monthly
 from src.ardl_ecm.charts import forecast_with_history_chart
+from src.ardl_ecm import explain
 
 st.set_page_config(page_title="Riwayat Prediksi", page_icon="📋", layout="wide")
 st.title("📋 Riwayat Prediksi")
@@ -37,9 +38,14 @@ st.subheader("Daftar Model Runs")
 runs_df = pd.DataFrame(runs)
 runs_df["run_at"] = pd.to_datetime(runs_df["run_at"])
 
+runs_df["backtest_span"] = [
+    f"{int(m)} bln" if str(mode).lower() == "backtest" and pd.notna(m) else "-"
+    for mode, m in zip(runs_df["mode"], runs_df["backtest_months"])
+]
+
 display_cols = [
-    "id", "run_at", "mode", "train_end_date", "endog_lag", "exog_orders",
-    "bounds_f_stat", "cointegration", "eval_mape", "status",
+    "id", "run_at", "mode", "backtest_span", "train_end_date", "endog_lag",
+    "exog_orders", "bounds_f_stat", "cointegration", "eval_mape", "status",
 ]
 st.dataframe(
     runs_df[display_cols],
@@ -51,6 +57,7 @@ st.dataframe(
             "Waktu Run", format="YYYY-MM-DD HH:mm"
         ),
         "mode": st.column_config.TextColumn("Mode"),
+        "backtest_span": st.column_config.TextColumn("Backtest (bulan)"),
         "train_end_date": st.column_config.DateColumn("Train End"),
         "endog_lag": st.column_config.NumberColumn("Lag p", format="%d"),
         "exog_orders": st.column_config.TextColumn("Exog Orders"),
@@ -171,5 +178,74 @@ if selected_id:
             file_name=f"prediction_run_{selected_id}.csv",
             mime="text/csv",
         )
+
+    # ====================================================================
+    # Rincian tahapan pipeline (ringkas, dari kolom DB yang tersimpan)
+    # ====================================================================
+    st.divider()
+    st.subheader("Rincian Tahapan Pipeline (ringkas)")
+    st.caption(
+        "Narasi metodologi tiap tahap + angka ringkasan yang tersimpan di database. "
+        "Statistik detail (tabel ADF, kandidat lag, koefisien, diagnostik residual, "
+        "proyeksi VAR) hanya tersedia di halaman **🔮 Prediksi Baru** saat run dijalankan."
+    )
+
+    _detail_na = "Detail hanya tersedia di halaman Prediksi Baru saat run dijalankan."
+
+    # Tahap 1-3: data dari price_history + resample
+    price_df_h = get_price_history(session)
+    with st.expander("🔽 Tahap 1–3 — Data, Resampling & Transformasi"):
+        st.markdown(explain.NARASI[1])
+        st.markdown(explain.NARASI[2])
+        st.markdown(explain.NARASI[3])
+        if not price_df_h.empty:
+            st.write(
+                f"Riwayat harga harian di DB: **{len(price_df_h)}** baris · "
+                f"{price_df_h['Time'].min().date()} s/d {price_df_h['Time'].max().date()}"
+            )
+            mh = resample_to_monthly(price_df_h.set_index("Time"), drop_partial=False)
+            st.write(f"Setara **{len(mh)}** baris bulanan (drop_partial=False).")
+        st.write(
+            f"Log-transform run ini: **{'Ya' if run['log_transform'] else 'Tidak'}**"
+        )
+
+    with st.expander("🔽 Tahap 4 — Uji Stasioneritas (ADF)"):
+        st.markdown(explain.NARASI[4])
+        st.info(_detail_na)
+
+    with st.expander("🔽 Tahap 5 — Pemilihan Lag & Estimasi ARDL"):
+        st.markdown(explain.NARASI[5])
+        st.write(
+            f"Lag endogen terpilih (p): **{run.get('endog_lag')}** · "
+            f"Order eksogen: **{run.get('exog_orders')}** · IC: **{run['ic'].upper()}**"
+        )
+        if run.get("train_r2") is not None:
+            st.write(f"R² training: **{run['train_r2']:.4f}**")
+        st.info(f"Tabel kandidat IC & koefisien penuh: {_detail_na.lower()}")
+
+    with st.expander("🔽 Tahap 6 — Uji Kointegrasi (Bounds Test)"):
+        st.markdown(explain.NARASI[6])
+        if run.get("bounds_f_stat") is not None:
+            st.write(
+                f"F-statistik: **{run['bounds_f_stat']:.4f}** · "
+                f"Verdict: **{run.get('cointegration')}**"
+            )
+        st.info(f"Tabel batas kritis lengkap: {_detail_na.lower()}")
+
+    with st.expander("🔽 Tahap 7 — Diagnostik ECM"):
+        st.markdown(explain.NARASI[7])
+        lam = run.get("lambda_ecm")
+        hl = run.get("half_life_months")
+        if lam is not None:
+            st.write(f"λ (speed of adjustment): **{lam:.6f}**")
+        if hl is not None:
+            st.write(f"Half-life: **{hl:.2f}** bulan")
+        st.info(f"Koefisien jangka panjang & diagnostik residual: {_detail_na.lower()}")
+
+    with st.expander("🔽 Tahap 8–9 — Proyeksi VAR & Forecasting"):
+        st.markdown(explain.NARASI[8])
+        st.markdown(explain.NARASI[9])
+        st.info(f"Detail proyeksi VAR & dekomposisi forecast: {_detail_na.lower()} "
+                "Hasil prediksi akhir tersedia pada tabel di atas.")
 
 session.close()

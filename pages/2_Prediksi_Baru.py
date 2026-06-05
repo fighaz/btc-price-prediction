@@ -30,6 +30,8 @@ from src.pipeline import (
     run_monthly_backtest,
 )
 from src.ardl_ecm.charts import forecast_with_history_chart, backtest_chart
+from src.ardl_ecm import explain
+from src.ardl_ecm.config import TREND
 
 logging.basicConfig(level=logging.INFO)
 
@@ -164,12 +166,231 @@ def progress_cb(step, detail):
     status_container.write(f"**{step}**: {detail}")
 
 
+def _df_or_info(df, empty_msg="Tidak tersedia."):
+    """Tampilkan DataFrame bila ada isi, selain itu pesan info."""
+    if df is not None and not df.empty:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info(empty_msg)
+
+
+def _render_pipeline_detail(result, run_config):
+    """Seksi expander bertahap Tahap 1-9 untuk laporan skripsi (mode forecast)."""
+    st.divider()
+    st.header("Rincian Detail Pipeline (untuk laporan)")
+    st.caption(
+        "Tiap tahap memuat informasi yang cukup untuk menjelaskan **mengapa** "
+        "hasilnya seperti itu — cocok dibahas satu per satu di laporan."
+    )
+
+    ardl = result.get("ardl_info", {})
+    adf_results = result.get("adf_results") or {}
+
+    # Tahap 1
+    daily = result.get("daily")
+    with st.expander("🔽 Tahap 1 — Pengambilan & Kualitas Data Harian"):
+        st.markdown(explain.NARASI[1])
+        if daily is not None and not daily.empty:
+            st.write(
+                f"Rentang: **{daily.index.min().date()}** s/d "
+                f"**{daily.index.max().date()}** · Jumlah hari: **{len(daily)}**"
+            )
+            st.dataframe(daily.tail(10).reset_index(), use_container_width=True)
+            st.markdown("**Ringkasan statistik OHLCV**")
+            st.dataframe(daily.describe(), use_container_width=True)
+        else:
+            st.info("Data harian tidak tersedia.")
+
+    # Tahap 2
+    monthly_full = result.get("monthly_full")
+    monthly = result.get("monthly_history")
+    with st.expander("🔽 Tahap 2 — Resampling ke Bulanan & Rolling Window"):
+        st.markdown(explain.NARASI[2])
+        n_full = len(monthly_full) if monthly_full is not None else 0
+        n_used = len(monthly) if monthly is not None else 0
+        st.write(
+            f"Baris bulanan tersedia: **{n_full}** · "
+            f"dipakai untuk training: **{n_used}**"
+        )
+        if monthly is not None and not monthly.empty:
+            st.dataframe(
+                monthly.tail(12).reset_index(), use_container_width=True
+            )
+
+    # Tahap 3
+    with st.expander("🔽 Tahap 3 — Transformasi Variabel (log)"):
+        st.markdown(explain.NARASI[3])
+        st.write(
+            f"Log-transform: **{'Aktif' if run_config.get('log_transform') else 'Tidak'}**"
+        )
+
+    # Tahap 4
+    with st.expander("🔽 Tahap 4 — Uji Stasioneritas (ADF)"):
+        st.markdown(explain.NARASI[4])
+        _df_or_info(explain.adf_to_df(adf_results), "Hasil ADF tidak tersedia.")
+        if adf_results.get("_any_i2"):
+            st.warning(
+                "⚠️ Terdeteksi variabel I(2) — ARDL bounds test menjadi tidak valid."
+            )
+
+    # Tahap 5
+    with st.expander("🔽 Tahap 5 — Pemilihan Lag (Endogen & Eksogen) & Estimasi ARDL"):
+        st.markdown(explain.NARASI[5])
+        if ardl.get("endog_lag") is not None:
+            st.write(
+                f"Lag endogen terpilih (p): **{ardl['endog_lag']}** · "
+                f"Order eksogen: **{ardl.get('exog_orders')}**"
+            )
+        if ardl.get("train_r2") is not None:
+            st.write(f"R² training: **{ardl['train_r2']:.4f}**")
+
+        lag_ic = result.get("lag_ic_table")
+        st.markdown(
+            "**Tabel kandidat lag (Information Criterion)** — baris ✓ = IC terkecil → "
+            "kombinasi p & q terpilih."
+        )
+        if lag_ic is not None and not lag_ic.empty:
+            st.caption(
+                f"Total {len(lag_ic)} kombinasi dievaluasi "
+                f"(grid: max lag endog={run_config.get('max_lag_endog')}, "
+                f"max lag exog={run_config.get('max_lag_exog')})."
+            )
+            st.dataframe(lag_ic, use_container_width=True, hide_index=True)
+        else:
+            st.info("Tabel IC tidak tersedia.")
+
+        st.markdown("**Koefisien model ARDL**")
+        _df_or_info(result.get("coef_table"), "Koefisien tidak tersedia.")
+
+    # Tahap 6
+    with st.expander("🔽 Tahap 6 — Uji Kointegrasi (Bounds Test Pesaran-Shin-Smith)"):
+        st.markdown(explain.NARASI[6])
+        if ardl.get("bounds_f_stat") is not None:
+            st.write(
+                f"F-statistik: **{ardl['bounds_f_stat']:.4f}** · "
+                f"Verdict: **{ardl.get('cointegration')}**"
+            )
+        st.markdown("**Batas kritis (pita keputusan)**")
+        _df_or_info(
+            explain.bounds_table_to_df(ardl), "Batas kritis tidak tersedia."
+        )
+
+    # Tahap 7
+    ecm = result.get("ecm_info")
+    with st.expander("🔽 Tahap 7 — Diagnostik ECM (Error Correction)"):
+        st.markdown(explain.NARASI[7])
+        if ecm:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("λ (speed of adjustment)", f"{ecm['lambda']:.6f}")
+            hl = ecm.get("half_life_months")
+            c2.metric("Half-life", f"{hl:.2f} bln" if hl else "-")
+            c3.metric("p-value λ", f"{ecm['p']:.4f}")
+            st.markdown("**Koefisien jangka panjang**")
+            _df_or_info(explain.longrun_to_df(ecm))
+            st.markdown("**Diagnostik residual**")
+            _df_or_info(explain.residual_diag_to_df(ecm))
+        else:
+            st.info("Tidak kointegrasi → ECM tidak diinterpretasikan.")
+
+    # Tahap 8
+    var_info = result.get("var_info") or {}
+    exog_future = result.get("exog_future")
+    with st.expander("🔽 Tahap 8 — Proyeksi Variabel Eksogen (VAR)"):
+        st.markdown(explain.NARASI[8])
+        if var_info.get("k_ar") is not None:
+            txt = f"Lag VAR terpilih (k_ar): **{var_info['k_ar']}**"
+            if var_info.get("fallback_p1"):
+                txt += " (fallback p=1)"
+            st.write(txt)
+        var_only = var_info.get("exog_var_only")
+        current_open = result.get("current_open")
+        if var_only is not None and not var_only.empty:
+            st.markdown("**Proyeksi VAR murni (sebelum injeksi Open)**")
+            st.dataframe(
+                var_only.reset_index(), use_container_width=True, hide_index=True
+            )
+        if exog_future is not None and not exog_future.empty:
+            st.markdown("**Eksogen final (Open aktual diinjeksikan)**")
+            st.dataframe(
+                exog_future.reset_index(), use_container_width=True, hide_index=True
+            )
+        if current_open is not None:
+            st.caption(f"Open aktual hari pertama bulan target: Rp {current_open:,.0f}")
+
+    # Tahap 9
+    fc = result.get("forecast")
+    fd = result.get("forecast_detail") or {}
+    with st.expander("🔽 Tahap 9 — Forecasting Akhir + Interval Keyakinan"):
+        st.markdown(explain.NARASI[9])
+        if fd:
+            st.write(
+                f"ŷ (skala log): **{fd.get('yhat_log')}** · "
+                f"σ² (bias correction): **{fd.get('sigma2')}**"
+            )
+        if fc is not None and not fc.empty:
+            row = fc.iloc[0]
+            st.write(
+                f"Inverse-log → **Prediksi Low: Rp {row['Predicted_Low']:,.0f}** · "
+                f"CI 95%: [Rp {row['CI_Lower']:,.0f} , Rp {row['CI_Upper']:,.0f}] · "
+                f"Lebar CI: Rp {(row['CI_Upper'] - row['CI_Lower']):,.0f}"
+            )
+        ev = result.get("eval_result")
+        if ev:
+            st.write(
+                f"Aktual: Rp {ev['actual_low']:,.0f} · Error: {ev['error_pct']:.2f}% · "
+                f"Dalam CI 95%: {'Ya' if ev['in_ci'] else 'Tidak'}"
+            )
+
+    _render_download_buttons(result, run_config)
+
+
+def _render_backtest_detail(result, run_config):
+    """Expander tunggal untuk mode backtest."""
+    st.divider()
+    st.header("Rincian Detail Pipeline (untuk laporan)")
+    with st.expander("🔽 Rincian Pipeline (Backtest Walk-Forward)", expanded=False):
+        st.markdown(
+            "Setiap iterasi backtest mengulang **seluruh tahap** (data → "
+            "stasioneritas → pemilihan lag → estimasi → kointegrasi → proyeksi VAR "
+            "→ forecast) memakai data s/d bulan target, lalu membandingkan prediksi "
+            "dengan Low aktual. Kolom diagnostik per-bulan tersedia di tabel hasil "
+            "(endog_lag, exog_orders, bounds_F, cointegration)."
+        )
+    _render_download_buttons(result, run_config)
+
+
+def _render_download_buttons(result, run_config):
+    """Tombol download laporan pipeline (Markdown + PDF)."""
+    st.subheader("Unduh Laporan Pipeline")
+    try:
+        md = explain.build_pipeline_report_md(result, run_config)
+        st.download_button(
+            "⬇️ Download .md",
+            md.encode("utf-8"),
+            file_name="laporan_pipeline.md",
+            mime="text/markdown",
+        )
+    except Exception as e:
+        st.warning(f"Gagal membuat Markdown: {e}")
+    try:
+        pdf = explain.build_pipeline_report_pdf(result, run_config)
+        st.download_button(
+            "⬇️ Download .pdf",
+            pdf,
+            file_name="laporan_pipeline.pdf",
+            mime="application/pdf",
+        )
+    except Exception as e:
+        st.warning(f"Gagal membuat PDF: {e}")
+
+
 common_kwargs = dict(
     log_transform=log_transform,
     rolling_window_years=int(rolling_window_years),
     max_lag_endog=int(max_lag_endog),
     max_lag_exog=int(max_lag_exog),
     ic=ic,
+    var_maxlag=int(max_lag_exog),
     progress_callback=progress_cb,
 )
 
@@ -202,8 +423,8 @@ try:
         "max_lag_endog": int(max_lag_endog),
         "max_lag_exog": int(max_lag_exog),
         "ic": ic,
-        "trend": "c",
-        "var_maxlag": 3,
+        "trend": TREND,
+        "var_maxlag": int(max_lag_exog),
         "backtest_months": int(backtest_months) if backtest_months else None,
     }
     run_id = save_model_run(session, run_config)
@@ -301,6 +522,8 @@ try:
             lambda x: f"{x:.4f}" if pd.notnull(x) else "N/A"
         )
         st.dataframe(bt, use_container_width=True, hide_index=True)
+
+        _render_backtest_detail(result, run_config)
     else:
         ardl = result["ardl_info"]
         st.subheader("Info Model")
@@ -368,6 +591,8 @@ try:
             e3.metric("Dalam CI 95%", "✅ Ya" if eval_result["in_ci"] else "❌ Tidak")
         elif mode == "forecast_and_evaluate":
             st.info("Data aktual untuk bulan target belum tersedia.")
+
+        _render_pipeline_detail(result, run_config)
 
 except Exception as e:
     status_container.update(label="Pipeline gagal!", state="error")

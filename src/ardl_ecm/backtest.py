@@ -74,14 +74,14 @@ def rolling_backtest(
         try:
             train = apply_rolling_window(train, rolling_window_years)
             endog_t, exog_t = prepare_variables(train, log_transform)
-            endog_lag, exog_orders = select_lag_order(
+            endog_lag, exog_orders, _ = select_lag_order(
                 endog_t, exog_t, max_lag_endog, max_lag_exog, ic, trend
             )
             fit = estimate_ardl(endog_t, exog_t, endog_lag, exog_orders, trend)
             _, bt, _, status = run_bounds_test(
                 endog_t, exog_t, endog_lag, exog_orders, trend
             )
-            exog_fut = forecast_exog_var(exog_t, horizon=1, var_maxlag=var_maxlag)
+            exog_fut, _ = forecast_exog_var(exog_t, horizon=1, var_maxlag=var_maxlag)
             # Injeksi actual Open bulan target: di awal bulan kita sudah tahu
             # harga pembukaan hari pertama, pakai nilai nyata bukan proyeksi VAR.
             col_open = "log_Open" if log_transform else "Open"
@@ -89,7 +89,7 @@ def rolling_backtest(
                 np.log(actual_row["Open"]) if log_transform else actual_row["Open"]
             )
             exog_fut.iloc[0, exog_fut.columns.get_loc(col_open)] = actual_open_val
-            forecast = forecast_monthly(
+            forecast, _ = forecast_monthly(
                 fit, endog_t, exog_fut, horizon=1, log_transform=log_transform
             )
 

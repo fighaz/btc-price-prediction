@@ -41,13 +41,13 @@ warnings.filterwarnings("ignore")
 # ============================================================================
 # KONFIGURASI
 # ============================================================================
-MODE = "rolling_backtest"  # "single" | "rolling_backtest" | "forecast_only"
+MODE = "forecast_only"  # "single" | "rolling_backtest" | "forecast_only"
 BACKTEST_MONTHS = 12             # jumlah bulan untuk walk-forward eval
-TRAIN_END = "2026-03-31"         # cutoff training (mode single)
+TRAIN_END = "2026-06-01"         # cutoff training (mode single)
 EVAL_END = "2026-04-30"          # untuk fetch aktual (mode single)
 
-MAX_LAG_ENDOG = 3                # monthly: lag kecil (max 3 bulan)
-MAX_LAG_EXOG = 3
+MAX_LAG_ENDOG = 4                # monthly: lag kecil (max 3 bulan)
+MAX_LAG_EXOG = 4
 IC = "aic"
 TREND = "c"
 VAR_MAXLAG = 3                   # untuk projeksi exog bulanan

@@ -62,6 +62,94 @@ Semua parameter ada di `src/ardl_ecm/config.py` dan bisa di-override per run dar
 
 ---
 
+## Tiga Jenis Lag — Jangan Tertukar
+
+Pipeline ini punya **tiga konfigurasi "lag" yang berbeda** dan sering disalahpahami. Ketiganya bekerja pada model yang berbeda dan untuk tujuan yang berbeda.
+
+| Konstanta | Milik model | Untuk apa | Hasil terpilih |
+|---|---|---|---|
+| `MAX_LAG_ENDOG` | **ARDL** (model utama prediksi Low) | Batas atas berapa bulan lalu nilai **Low sendiri** dipakai memprediksi Low | `endog_lag` (p) |
+| `MAX_LAG_EXOG` | **ARDL** (model utama prediksi Low) | Batas atas berapa bulan lalu **Open/Close/Volume** dipakai memprediksi Low | `exog_orders` (q per variabel) |
+| `VAR_MAXLAG` | **VAR** (sub-model proyeksi eksogen) | Batas atas berapa bulan lalu dipakai **memproyeksikan Open/Close/Volume bulan depan** | `k_ar` (lag VAR terpilih) |
+
+### Kenapa VAR diperlukan sama sekali?
+
+Model ARDL memprediksi `Low` bulan depan, tetapi sebagai input ia butuh nilai **eksogen bulan depan** (`log_Open`, `log_Close`, `log_Volume`) — yang belum terjadi. Maka eksogen masa depan harus **diproyeksikan dulu** dengan VAR (Langkah 9), baru hasilnya dimasukkan ke ARDL (Langkah 11). Khusus `log_Open`, proyeksi VAR diganti harga Open aktual hari pertama bulan target (Langkah 10).
+
+```
+MAX_LAG_ENDOG / MAX_LAG_EXOG ──► ARDL: prediksi Low dari masa lalu Low + eksogen
+                                          ▲
+                                          │ butuh eksogen BULAN DEPAN sebagai input
+                                          │
+VAR_MAXLAG ─────────────────────► VAR: proyeksikan eksogen bulan depan
+```
+
+> **Catatan:** semua nilai di atas hanyalah **batas atas pencarian**. Lag yang benar-benar dipakai dipilih otomatis via AIC dan biasanya lebih kecil dari batasnya.
+
+### Arti angka order (mis. `q = 0` vs `q = 2`)
+
+Untuk variabel **eksogen**, angka order = **lag maksimum** yang dipakai; variabel selalu disertakan dari lag 0 sampai angka itu:
+
+| Notasi | Lag yang dipakai | Arti |
+|---|---|---|
+| `log_Open: 0` | lag 0 | Open **bulan berjalan** saja (kontemporer). Order 0 **bukan** berarti tidak dipakai. |
+| `log_Close: 2` | lag 0, 1, 2 | Close bulan berjalan + 2 bulan sebelumnya |
+| `log_Volume: 1` | lag 0, 1 | Volume bulan berjalan + 1 bulan sebelumnya |
+
+Untuk variabel **endogen** (`p`) aturannya beda — **tidak** memakai lag 0 (karena lag 0 dari Low adalah nilai yang sedang diprediksi):
+
+| Notasi | Lag yang dipakai |
+|---|---|
+| `p = 4` | Low pada lag 1, 2, 3, 4 |
+
+Jadi `ARDL(p=4, orders={'log_Open': 0, 'log_Close': 2, 'log_Volume': 1})` berarti notasi **ARDL(4, 0, 2, 1)**.
+
+---
+
+## Analisis Pemilihan Max Lag
+
+`max_lag_endog` dan `max_lag_exog` adalah **batas atas** pencarian lag (lihat "Tiga Jenis Lag"). Pertanyaannya: berapa batas yang sebaiknya dipakai? Dua perspektif diuji — fit *in-sample* (AIC) dan akurasi *out-of-sample* (backtest).
+
+### Perspektif 1 — AIC (fit in-sample)
+
+Grid-search `ardl_select_order` dijalankan pada data training (147 bulan, s/d April 2026) dengan max lag berbeda; target forecast Mei 2026. AIC mengukur trade-off goodness-of-fit vs kompleksitas (makin kecil makin baik):
+
+| Max lag | Model terpilih (p, q-orders) | AIC | Prediksi Mei | Jumlah kandidat |
+|---|---|---|---|---|
+| 4 | ARDL(4, {Open:0, Close:2, Vol:1}) | -267.82 | Rp 1.199 M | 1.080 |
+| **6** | ARDL(5, {Open:3, Close:0, Vol:6}) | **-270.32** | Rp 1.222 M | 3.584 |
+| 8 | ARDL(5, {Open:3, Close:0, Vol:6}) | -270.32 | Rp 1.253 M | 9.000 |
+| 12 | ARDL(5, {Open:3, Close:0, Vol:6}) | -270.32 | Rp 1.254 M | 35.672 |
+
+- Menaikkan max lag 4 → 6 menurunkan AIC (-267.82 → -270.32): ada struktur lag yang lebih baik yang **terlewat** saat batas hanya 4.
+- Max lag **8 dan 12 menghasilkan model identik** dengan 6 (AIC & orders sama) — pencarian sudah **konvergen di lag 6**. Memperbesar batas hanya menambah jumlah kandidat (3.584 → 35.672) dan memperlama komputasi tanpa menemukan model lebih baik. (Prediksi sedikit bergeser di lag 8/12 karena `var_maxlag` proyeksi VAR ikut membesar.)
+- Aturan praktis: max lag wajar ≤ n/4 (untuk 147 bulan ≈ 37), tapi untuk data **bulanan** lag > 12 jarang bermakna secara ekonomis.
+- Aktual Low Mei 2026 = **Rp 1.294 M** — semua konfigurasi memprediksi di kisaran wajar (error 3–7%).
+
+### Perspektif 2 — Backtest walk-forward (akurasi out-of-sample)
+
+Backtest dengan **horizon tetap 12 bulan**, max lag divariasikan (data s/d Mei 2026):
+
+| Max lag | MAPE | RMSE | MAE | R² | CI Coverage | Coint |
+|---|---|---|---|---|---|---|
+| 3 | 8.39% | Rp 140.8 M | Rp 114.1 M | 0.7228 | 91.7% | 100% |
+| **4** | **7.88%** | Rp 134.2 M | Rp 106.9 M | 0.7482 | 91.7% | 100% |
+| 6 | 8.37% | Rp 134.3 M | Rp 112.6 M | 0.7479 | 83.3% | 100% |
+| 12 | 8.25% | Rp 136.6 M | Rp 111.0 M | 0.7392 | 83.3% | 100% |
+
+- **MAPE terbaik di max lag 4** (7.88%) — bukan 6. Max lag 3, 6, 12 semuanya lebih buruk (8.25–8.39%). Menambah max lag **tidak otomatis** memperbaiki akurasi out-of-sample.
+- **Max lag 4** juga unggul di MAE (106.9 M) dan **CI coverage tertinggi** (91.7%). Max lag 6 sedikit lebih sempit intervalnya (CI coverage turun ke 83.3%) sehingga lebih sering meleset dari aktual.
+- **Max lag 12** tidak memberi keunggulan meski paling kompleks — indikasi diminishing return / **over-fitting**: lag tambahan menangkap noise, bukan sinyal.
+- Kointegrasi terdeteksi 100% di semua konfigurasi.
+
+### Kesimpulan
+
+AIC in-sample favor **max lag 6**, tetapi backtest out-of-sample favor **max lag 4** (MAPE, MAE, & CI coverage terbaik). Ini pelajaran penting: **AIC mengukur fit pada data latih, bukan akurasi prediksi masa depan** — keduanya bisa menunjuk arah berbeda. Karena prioritas model ini adalah akurasi prediksi nyata, **default dipertahankan di max lag 4**. Max lag tetap dapat diatur dari form Prediksi Baru bila ingin bereksperimen.
+
+> Catatan: nilai akhir lag yang **dipakai** model selalu dipilih otomatis via AIC dalam batas yang ditentukan, dan biasanya lebih kecil dari batas itu.
+
+---
+
 ## Alur Lengkap: Dari Pengambilan Data Hingga Output Prediksi
 
 ### Asumsi Utama
