@@ -44,6 +44,21 @@ streamlit run app.py
 
 ---
 
+## Halaman Aplikasi
+
+Aplikasi terdiri dari beberapa halaman (sidebar Streamlit):
+
+| Halaman | Fungsi |
+|---|---|
+| 📊 **Dashboard** | Ringkasan prediksi terakhir + chart Low historis & forecast bulan berjalan. |
+| 🔮 **Prediksi Baru** | Menjalankan pipeline dengan 3 mode (Forecast, Forecast+Evaluasi, Backtest) dan parameter yang bisa disesuaikan. Menampilkan **Rincian Detail Pipeline** (Tahap 1–9: data, ADF, pemilihan lag, koefisien ARDL, bounds test, ECM, proyeksi exog, forecast) dan tombol **download laporan (Markdown & PDF)** untuk lampiran skripsi. |
+| 📋 **Riwayat Prediksi** | Telusuri seluruh histori run beserta konfigurasi & hasilnya dari database; detail tahapan ringkas per run. |
+| 📏 **Evaluasi** | Bandingkan prediksi vs aktual per run: tabel error & chart actual-vs-predicted. |
+| 📁 **Data Historis** | Eksplorasi data harga harian & bulanan (OHLC) dari database. |
+| 6️⃣ **Simulasi DCA** | Bandingkan 4 strategi Dollar-Cost Averaging (Open, Close, Low ideal, Prediksi model). |
+
+---
+
 ## Parameter & Konfigurasi Default
 
 Semua parameter ada di `src/ardl_ecm/config.py` dan bisa di-override per run dari UI.
@@ -52,7 +67,7 @@ Semua parameter ada di `src/ardl_ecm/config.py` dan bisa di-override per run dar
 |---|---|---|
 | `MAX_LAG_ENDOG` | 4 | Maksimum lag untuk variabel Low (target) |
 | `MAX_LAG_EXOG` | 4 | Maksimum lag untuk Open, Close, Volume |
-| `VAR_MAXLAG` | 4 | Maksimum lag untuk model VAR proyeksi exog |
+| `VAR_MAXLAG` | 4 | Maksimum lag VAR proyeksi exog (default; dari form Prediksi Baru nilainya **mengikuti `Max lag eksogen`**) |
 | `IC` | `"aic"` | Information criterion pemilihan lag (AIC) |
 | `TREND` | `"c"` | Spesifikasi trend: konstanta saja |
 | `USE_LOG_TRANSFORM` | `True` | Log-transform OHLCV untuk stabilisasi variansi |
@@ -109,6 +124,10 @@ Jadi `ARDL(p=4, orders={'log_Open': 0, 'log_Close': 2, 'log_Volume': 1})` berart
 ## Analisis Pemilihan Max Lag
 
 `max_lag_endog` dan `max_lag_exog` adalah **batas atas** pencarian lag (lihat "Tiga Jenis Lag"). Pertanyaannya: berapa batas yang sebaiknya dipakai? Dua perspektif diuji — fit *in-sample* (AIC) dan akurasi *out-of-sample* (backtest).
+
+### In-sample vs Out-of-sample — Apa Bedanya?
+
+**AIC (in-sample)** mengukur seberapa baik model mencocokkan data historis yang dipakai untuk melatihnya — cenderung memilih model lebih kompleks. **Backtest walk-forward (out-of-sample)** mengukur akurasi prediksi pada data yang belum pernah dilihat model, mensimulasikan penggunaan nyata. Ketika keduanya berbeda arah, backtest lebih dipercaya sebagai indikator performa sesungguhnya, karena tujuan akhir model adalah memprediksi masa depan — bukan menjelaskan masa lalu.
 
 ### Perspektif 1 — AIC (fit in-sample)
 
@@ -291,12 +310,14 @@ Jika cointegrated, diekstrak:
 
 ### Langkah 9 — Proyeksi Variabel Exogen via VAR (`forecast.py`)
 
-**Fungsi:** `forecast_exog_var(exog, horizon=1, var_maxlag=4)`
+**Fungsi:** `forecast_exog_var(exog, horizon=1, var_maxlag=...)`
 
 Karena nilai Open/Close/Volume bulan M belum diketahui sepenuhnya, ketiga variabel ini diproyeksikan 1 bulan ke depan menggunakan model VAR(p):
-1. Fit VAR ke seluruh data exog historis, lag dipilih via AIC (maks 4)
+1. Fit VAR ke seluruh data exog historis, lag dipilih via AIC dengan batas maksimum `var_maxlag`
 2. Gunakan p observasi terakhir sebagai seed
 3. Forecast 1 langkah ke depan
+
+> **Catatan `var_maxlag`:** dari halaman Prediksi Baru, `var_maxlag` **mengikuti nilai `Max lag eksogen` yang Anda set di form** (bukan konstanta terpisah) — agar batas lag VAR konsisten dengan batas lag eksogen pada grid-search ARDL. Bila fungsi pipeline dipanggil langsung tanpa argumen (mis. dari CLI/test), `var_maxlag` memakai default `VAR_MAXLAG` di `config.py`.
 
 **Output:** DataFrame 1 baris dengan kolom `[log_Open, log_Close, log_Volume]` untuk bulan M.
 
