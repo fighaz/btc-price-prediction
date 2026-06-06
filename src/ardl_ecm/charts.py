@@ -489,3 +489,66 @@ def dca_price_comparison_chart(long_df):
         )
         .interactive()
     )
+
+
+def dca_hit_miss_chart(dca_result):
+    """
+    Bar chart status Hit/Miss/Skip prediksi model per bulan.
+
+    Tiap bulan satu bar setinggi harga eksekusi (Miliar IDR), diwarnai
+    sesuai hasil prediksi:
+        Hit  (hijau)   — model berhasil beli di harga prediksi
+        Miss (merah)   — prediksi terlalu rendah, fallback ke Close
+        Skip (abu-abu) — tidak ada prediksi bulan itu
+
+    Mengikuti pola error_bar_chart (sumbu Y numerik nyata).
+    dca_result: dict output simulate_dca(), kunci 'model' harus ada.
+    Returns alt.Chart atau None bila data tidak tersedia.
+    """
+    if "model" not in dca_result:
+        return None
+
+    src = pd.DataFrame(dca_result["model"]).copy()
+    if "Status" not in src.columns or src.empty:
+        return None
+
+    def _hasil(s):
+        s = str(s)
+        if s.startswith("Hit"):
+            return "Hit"
+        if s.startswith("Miss"):
+            return "Miss"
+        return "Skip"
+
+    harga = src["Harga_Beli"].fillna(0.0)
+    df = pd.DataFrame(
+        {
+            "Bulan": _month_label(src["Bulan"]),
+            "Harga": harga / _SCALE,
+            "Hasil": [_hasil(s) for s in src["Status"]],
+        }
+    )
+
+    return (
+        alt.Chart(df)
+        .mark_bar()
+        .encode(
+            x=alt.X("Bulan:O", title="Bulan", axis=alt.Axis(labelAngle=-45)),
+            y=alt.Y("Harga:Q", title="Harga Eksekusi (Miliar IDR)"),
+            color=alt.Color(
+                "Hasil:N",
+                scale=alt.Scale(
+                    domain=["Hit", "Miss", "Skip"],
+                    range=["#4CAF50", "#E91E63", "#9E9E9E"],
+                ),
+                legend=alt.Legend(title="Status", orient="top"),
+            ),
+            tooltip=[
+                alt.Tooltip("Bulan:O", title="Bulan"),
+                alt.Tooltip("Hasil:N", title="Status"),
+                alt.Tooltip("Harga:Q", title="Harga (M IDR)", format=",.4f"),
+            ],
+        )
+        .properties(height=320, title="Status Prediksi Model per Bulan")
+        .interactive()
+    )

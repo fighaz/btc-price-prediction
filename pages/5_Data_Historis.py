@@ -46,11 +46,17 @@ freq = st.radio("Frekuensi data", ["Harian", "Bulanan"], horizontal=True)
 
 # Filter tanggal
 st.subheader("Filter Data")
+data_min = price_df["Time"].min().date()
+data_max = price_df["Time"].max().date()
 fcol1, fcol2 = st.columns(2)
 with fcol1:
-    start_date = st.date_input("Dari", value=price_df["Time"].min().date())
+    start_date = st.date_input(
+        "Dari", value=data_min, min_value=data_min, max_value=data_max
+    )
 with fcol2:
-    end_date = st.date_input("Sampai", value=price_df["Time"].max().date())
+    end_date = st.date_input(
+        "Sampai", value=data_max, min_value=data_min, max_value=data_max
+    )
 
 filtered = price_df[
     (price_df["Time"] >= pd.Timestamp(start_date))

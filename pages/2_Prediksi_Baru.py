@@ -100,9 +100,11 @@ with st.form("prediction_form"):
                 f"Prediksi: Low {_BULAN_ID[target_month_num - 1]} {target_year}"
             )
         else:
+            bt_last_month = target_month_num - 1 if target_month_num > 1 else 12
+            bt_last_year = target_year if target_month_num > 1 else target_year - 1
             st.caption(
-                f"Backtest mencakup N bulan terakhir s/d "
-                f"**{_BULAN_ID[target_month_num - 1]} {target_year}**. "
+                f"Data diambil sampai 1 {_BULAN_ID[target_month_num - 1]} {target_year} · "
+                f"Backtest mencakup N bulan terakhir s/d **{_BULAN_ID[bt_last_month - 1]} {bt_last_year}**. "
                 "Tiap iterasi menggunakan Open hari pertama bulan target sebagai sinyal."
             )
 

@@ -268,7 +268,9 @@ def run_monthly_backtest(
     train_end_dt = pd.Timestamp(train_end)
     last_month_start = train_end_dt.replace(day=1)
     daily = fetch_btc_daily(to_date=last_month_start.strftime("%Y-%m-%d"))
-    monthly = resample_to_monthly(daily, drop_partial=False)
+    # drop_partial=True: bulan berjalan (belum tutup) tidak masuk sebagai
+    # actual_row backtest — actual_low harus dari bulan yang sudah lengkap.
+    monthly = resample_to_monthly(daily, drop_partial=True)
 
     def bt_progress(iter_no, total, detail):
         if progress_callback:

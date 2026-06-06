@@ -18,7 +18,7 @@ from src.ardl_ecm.dca import (
     build_long_df,
     STRATEGY_LABELS,
 )
-from src.ardl_ecm.charts import dca_price_comparison_chart
+from src.ardl_ecm.charts import dca_price_comparison_chart, dca_hit_miss_chart
 
 st.set_page_config(page_title="Simulasi DCA", page_icon="💰", layout="wide")
 st.title("💰 Simulasi DCA")
@@ -233,6 +233,14 @@ st.caption(
     "titik transparan = miss (harga aktual lebih tinggi, fallback ke Close). "
     "Arahkan kursor untuk detail; scroll untuk zoom."
 )
+
+hit_miss_fig = dca_hit_miss_chart(dca_result)
+if hit_miss_fig is not None:
+    st.altair_chart(hit_miss_fig, use_container_width=True)
+    st.caption(
+        "Status prediksi model tiap bulan: hijau = hit (beli di prediksi), "
+        "merah = miss (fallback ke Close), abu-abu = tidak ada prediksi."
+    )
 
 st.divider()
 
