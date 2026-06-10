@@ -222,7 +222,7 @@ def summary_dca(dca_result, harga_akhir):
         hit_count = miss_count = None
         hit_rate_pct = None
         if s == "model" and "Status" in df.columns:
-            hit_count  = int(df["Status"].str.startswith("Beli").sum())
+            hit_count  = int(df["Status"].str.startswith("Hit").sum())
             miss_count = int(df["Status"].str.startswith("Miss").sum())
             total_pred = hit_count + miss_count
             hit_rate_pct = hit_count / total_pred * 100 if total_pred > 0 else None

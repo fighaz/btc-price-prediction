@@ -138,7 +138,8 @@ with st.form("prediction_form"):
         )
     elif mode == "backtest":
         backtest_months = st.number_input(
-            "Jumlah bulan backtest", min_value=3, max_value=36, value=12,
+            "Jumlah bulan backtest", min_value=3, max_value=120, value=12,
+            help="Maksimal 120 bulan (10 tahun).",
         )
 
     submitted = st.form_submit_button(
